@@ -312,10 +312,6 @@ class Eliza:
 
 
 def main():
-    # LO QUE DEBES HACER TU DIRECTAMENTE:
-    # 1. Instalar requests en tu terminal (si no lo has hecho): python -m pip install requests
-    # 2. Abrir cada uno de los 4 JSON en GitHub, hacer clic en el boton "Raw",
-    #    copiar el enlace de tu navegador y pegarlo aqui abajo:
     urls = {
         "entrada": "https://raw.githubusercontent.com/FernandoSapient/BPTSP05_2627-1/refs/heads/main/entrada.json",
         "salida": "https://raw.githubusercontent.com/FernandoSapient/BPTSP05_2627-1/refs/heads/main/salida.json",
