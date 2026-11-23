@@ -1,0 +1,330 @@
+import random
+import requests
+
+
+class Person:
+    def __init__(self, name, origin, relationship):
+        self.name = name
+        self.origin = origin
+        self.relationship = relationship
+
+    def to_line(self):
+        return f"PERSON|{self.name}|{self.origin}|{self.relationship}"
+
+    def __str__(self):
+        return f"{self.name} ({self.relationship}, de {self.origin})"
+
+
+class User(Person):
+    def __init__(self, name, origin, relationship="usuario"):
+        super().__init__(name, origin, relationship)
+
+    def to_line(self):
+        return f"USER|{self.name}|{self.origin}|{self.relationship}"
+
+    def __str__(self):
+        return f"Usuario: {self.name} (de {self.origin})"
+
+
+class Response:
+    def __init__(self, text):
+        self.text = text
+
+    def __str__(self):
+        return self.text
+
+
+class Keyword:
+    def __init__(self, category, priority, input_phrases, responses):
+        self.category = category
+        self.priority = priority
+        self.input_phrases = input_phrases
+        self.responses = responses
+
+    def matches(self, clean_text):
+        words_in_text = clean_text.split()
+
+        for raw_phrase in self.input_phrases:
+            phrase = raw_phrase.lower().strip()
+
+            if "*" in phrase:
+                prefix = phrase.replace("*", "").strip()
+                if prefix in clean_text:
+                    parts = clean_text.split(prefix, 1)
+                    after = parts[1].strip()
+                    if after != "":
+                        captured = after.split()[0]
+                        return True, captured
+                    return True, ""
+
+            elif " " in phrase:
+                if phrase in clean_text:
+                    last_word = phrase.split()[-1]
+                    return True, last_word
+
+            else:
+                if phrase in words_in_text:
+                    return True, phrase
+
+        return False, ""
+
+    def get_random_reply(self):
+        if len(self.responses) == 0:
+            return "Cuentame un poco mas sobre eso."
+        chosen = random.choice(self.responses)
+        return chosen.text
+
+    def __str__(self):
+        return f"Keyword('{self.category}', prioridad={self.priority})"
+
+
+class Eliza:
+    def __init__(self, urls, memory_file="memoria.txt"):
+        self.urls = urls
+        self.memory_file = memory_file
+        self.user = None
+        self.people = []
+        self.keywords = []
+        self.conversational_responses = []
+        self.people_data = {}
+        self.places_data = {}
+
+    def ask_non_empty(self, prompt):
+        while True:
+            answer = input(prompt).strip()
+            if answer != "":
+                return answer
+            print("ELIZA: Por favor, escribe algo para poder continuar.")
+
+    def clean_input(self, text):
+        clean = text.lower().strip()
+        for symbol in ["?", "¿", "!", "¡", ".", ",", ";", ":"]:
+            clean = clean.replace(symbol, "")
+        return clean
+
+    def extract_with_patterns(self, clean_text, patterns, fallback_last_word=True):
+        for raw_pattern in patterns:
+            pattern = raw_pattern.lower().strip()
+            if "*" in pattern:
+                prefix = pattern.replace("*", "").strip()
+                if prefix in clean_text:
+                    parts = clean_text.split(prefix, 1)
+                    after = parts[1].strip()
+                    if after != "":
+                        return after.split()[0].title()
+
+        words = clean_text.split()
+        if fallback_last_word and len(words) > 0:
+            return words[-1].title()
+        return clean_text.title()
+
+    def load_from_github(self):
+        r_in = requests.get(self.urls["entrada"])
+        r_out = requests.get(self.urls["salida"])
+        r_per = requests.get(self.urls["personas"])
+        r_lug = requests.get(self.urls["lugares"])
+
+        if (
+            r_in.status_code != requests.codes.ok
+            or r_out.status_code != requests.codes.ok
+            or r_per.status_code != requests.codes.ok
+            or r_lug.status_code != requests.codes.ok
+        ):
+            print("Error al descargar los archivos JSON desde GitHub.")
+            return False
+
+        entrada_json = r_in.json()
+        salida_json = r_out.json()
+        self.people_data = r_per.json()
+        self.places_data = r_lug.json()
+
+        for category, info in entrada_json.items():
+            priority = info.get("Prioridad", 99)
+            in_phrases = info.get("Frases clave", [])
+            out_phrases = salida_json.get(category, {}).get("Frases clave", [])
+
+            resp_objects = []
+            for text in out_phrases:
+                resp_objects.append(Response(text))
+
+            self.keywords.append(Keyword(category, priority, in_phrases, resp_objects))
+
+        conv_phrases = salida_json.get("Conversacional", {}).get("Frases clave", [])
+        for text in conv_phrases:
+            self.conversational_responses.append(Response(text))
+
+        return True
+
+    def load_memory(self):
+        with open(self.memory_file, "a", encoding="utf-8") as f:
+            pass
+
+        with open(self.memory_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        for line in lines:
+            clean_line = line.strip()
+            if clean_line != "":
+                parts = clean_line.split("|")
+                if len(parts) == 4:
+                    record_type = parts[0]
+                    name = parts[1]
+                    origin = parts[2]
+                    relationship = parts[3]
+                    if record_type == "USER":
+                        self.user = User(name, origin, relationship)
+                    elif record_type == "PERSON":
+                        self.people.append(Person(name, origin, relationship))
+
+    def save_memory(self):
+        with open(self.memory_file, "w", encoding="utf-8") as f:
+            if self.user is not None:
+                f.write(self.user.to_line() + "\n")
+            for person in self.people:
+                f.write(person.to_line() + "\n")
+
+    def linear_search_by_relationship(self, relationship):
+        target = relationship.lower().strip()
+        for person in self.people:
+            if person.relationship.lower() == target:
+                return person
+        return None
+
+    def linear_search_by_name(self, name):
+        target = name.lower().strip()
+        for person in self.people:
+            if person.name.lower() == target:
+                return person
+        return None
+
+    def identify_user(self):
+        if self.user is not None:
+            print(f"ELIZA: ¡Hola de nuevo, {self.user.name} de {self.user.origin}! ¿Como te sientes hoy?")
+            return
+
+        print("ELIZA: ¡Hola! Soy ELIZA.")
+
+        ask_name_list = self.people_data.get("Preguntar usuario", {}).get("Frases clave", ["¿Cómo te llamas?"])
+        rec_name_patterns = self.people_data.get("Reconocer usuario", {}).get("Frases clave", [])
+        raw_name = self.ask_non_empty(f"ELIZA: {random.choice(ask_name_list)}\nTu: ")
+        user_name = self.extract_with_patterns(self.clean_input(raw_name), rec_name_patterns, fallback_last_word=True)
+
+        ask_place_list = self.places_data.get("Preguntar usuario", {}).get("Frases clave", ["¿De dónde eres?"])
+        rec_place_patterns = (
+            self.places_data.get("Reconocer lugar", {}).get("Frases clave", [])
+            + self.places_data.get("Reconocer gentilicio", {}).get("Frases clave", [])
+        )
+        raw_place = self.ask_non_empty(f"ELIZA: Mucho gusto, {user_name}. {random.choice(ask_place_list)}\nTu: ")
+        user_origin = self.extract_with_patterns(
+            self.clean_input(raw_place), rec_place_patterns, fallback_last_word=False
+        )
+
+        self.user = User(user_name, user_origin)
+        print(f"ELIZA: Encantada de conocerte, {self.user.name}. ¿De que quieres hablar?")
+
+    def handle_freudiano(self, relationship):
+        rel_clean = relationship.lower().strip()
+        if rel_clean == "":
+            return
+
+        existing_rel = self.linear_search_by_relationship(rel_clean)
+        if existing_rel is not None:
+            print(f"ELIZA: Recuerdo a {existing_rel.name}, tu {existing_rel.relationship} de {existing_rel.origin}.")
+            return
+
+        ask_rel_name = self.people_data.get("Preguntar relación", {}).get("Frases clave", ["¿Cómo se llama?"])
+        rec_rel_patterns = self.people_data.get("Reconocer relación", {}).get("Frases clave", [])
+        raw_name = self.ask_non_empty(f"ELIZA: Sobre tu {rel_clean}... {random.choice(ask_rel_name)}\nTu: ")
+        person_name = self.extract_with_patterns(self.clean_input(raw_name), rec_rel_patterns, fallback_last_word=True)
+
+        existing_name = self.linear_search_by_name(person_name)
+        if existing_name is not None:
+            print(f"ELIZA: ¡Ah! Ya conocia a {existing_name.name}, de {existing_name.origin}.")
+            return
+
+        ask_rel_place = self.places_data.get("Preguntar relación", {}).get("Frases clave", ["¿De dónde es?"])
+        rec_place_patterns = (
+            self.places_data.get("Reconocer lugar", {}).get("Frases clave", [])
+            + self.places_data.get("Reconocer gentilicio", {}).get("Frases clave", [])
+        )
+        raw_place = self.ask_non_empty(f"ELIZA: {random.choice(ask_rel_place)}\nTu: ")
+        person_origin = self.extract_with_patterns(
+            self.clean_input(raw_place), rec_place_patterns, fallback_last_word=False
+        )
+
+        new_person = Person(person_name, person_origin, rel_clean)
+        self.people.append(new_person)
+        print(f"ELIZA: Gracias, recordare a {new_person}.")
+
+    def find_highest_priority_match(self, clean_text):
+        best_kw = None
+        for kw in self.keywords:
+            if kw.priority != 3:
+                matched, _ = kw.matches(clean_text)
+                if matched:
+                    if best_kw is None or kw.priority < best_kw.priority:
+                        best_kw = kw
+        return best_kw
+
+    def find_freudiano_match(self, clean_text):
+        for kw in self.keywords:
+            if kw.priority == 3:
+                matched, captured_rel = kw.matches(clean_text)
+                if matched:
+                    return kw, captured_rel
+        return None, ""
+
+    def start(self):
+        if not self.load_from_github():
+            return
+
+        self.load_memory()
+        self.identify_user()
+
+        while True:
+            raw_text = self.ask_non_empty("Tu: ")
+            clean_text = self.clean_input(raw_text)
+
+            best_kw = self.find_highest_priority_match(clean_text)
+
+            if best_kw is not None and best_kw.priority == 1:
+                print("ELIZA:", best_kw.get_random_reply())
+                self.save_memory()
+                break
+
+            freud_kw, captured_rel = self.find_freudiano_match(clean_text)
+
+            if best_kw is not None:
+                print("ELIZA:", best_kw.get_random_reply())
+            elif freud_kw is not None:
+                print("ELIZA:", freud_kw.get_random_reply())
+            else:
+                if len(self.conversational_responses) > 0:
+                    print("ELIZA:", random.choice(self.conversational_responses).text)
+                else:
+                    print("ELIZA: Cuentame un poco mas sobre ti.")
+
+            if freud_kw is not None:
+                self.handle_freudiano(captured_rel)
+
+    def __str__(self):
+        return f"Eliza(categorias={len(self.keywords)}, personas={len(self.people)})"
+
+
+def main():
+    # LO QUE DEBES HACER TU DIRECTAMENTE:
+    # 1. Instalar requests en tu terminal (si no lo has hecho): python -m pip install requests
+    # 2. Abrir cada uno de los 4 JSON en GitHub, hacer clic en el boton "Raw",
+    #    copiar el enlace de tu navegador y pegarlo aqui abajo:
+    urls = {
+        "entrada": "https://raw.githubusercontent.com/FernandoSapient/BPTSP05_2627-1/refs/heads/main/entrada.json",
+        "salida": "https://raw.githubusercontent.com/FernandoSapient/BPTSP05_2627-1/refs/heads/main/salida.json",
+        "personas": "https://raw.githubusercontent.com/FernandoSapient/BPTSP05_2627-1/refs/heads/main/personas.json",
+        "lugares": "https://raw.githubusercontent.com/FernandoSapient/BPTSP05_2627-1/refs/heads/main/lugares.json",
+    }
+    bot = Eliza(urls)
+    bot.start()
+
+
+if __name__ == "__main__":
+    main()
